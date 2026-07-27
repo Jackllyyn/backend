@@ -14,8 +14,11 @@ const JWT_EXPIRE = process.env.JWT_EXPIRE || '7d';
 
 // Middleware
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:5174'],
-    credentials: true
+    origin: [
+        'http://localhost:3000', 
+        'http://localhost:5173', 
+        'http://localhost:5174',
+        process.env.FRONTEND_URL || 'https://your-frontend.up.railway.app'
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
