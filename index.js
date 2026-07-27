@@ -7,7 +7,7 @@ const bcrypt = require('bcryptjs');
 
 if (process.env.NODE_ENV !== 'production') {
     dotenv.config();
-
+}
 const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this';
