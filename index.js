@@ -5,7 +5,8 @@ const dotenv = require('dotenv');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
-dotenv.config();
+if (process.env.NODE_ENV !== 'production') {
+    dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -29,10 +30,11 @@ app.use(express.urlencoded({ extended: true }));
 // KONEKSI DATABASE (Promise)
 // ============================================================
 const db = mysql.createPool({
-    host: process.env.DB_HOST || 'localhost',
+    host: process.env.DB_HOST || 'sakura.proxy.rlwy.net',
     user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'db_ahp',
+    password: process.env.DB_PASSWORD || 'RueKWWlatIjajMLGYhTkZVJOUgjRpjRg',
+    database: process.env.DB_NAME || 'railway',
+    port: process.env.DB_PORT || 56322,
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
