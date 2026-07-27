@@ -13,16 +13,26 @@ const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this';
 const JWT_EXPIRE = process.env.JWT_EXPIRE || '7d';
 
-// Middleware
+// ============================================================
+// MIDDLEWARE - CORS (HARDCODE)
+// ============================================================
 app.use(cors({
     origin: [
-        'http://localhost:3000', 
-        'http://localhost:5173', 
+        'http://localhost:3000',
+        'http://localhost:5173',
         'http://localhost:5174',
-        process.env.FRONTEND_URL || 'https://your-frontend.up.railway.app'
-    ],
-    credentials: true
+        'https://spkahp.vercel.app',
+        'https://spk-emjb0he9f-jackllyyns-projects.vercel.app',
+        'https://spk-ahp.vercel.app',
+        process.env.FRONTEND_URL
+    ].filter(Boolean),
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// Tambahkan ini untuk handle preflight
+app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
