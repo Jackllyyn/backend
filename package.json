@@ -1,0 +1,24 @@
+{
+  "name": "spk-ahp-backend",
+  "version": "1.0.0",
+  "description": "Backend SPK AHP Perpustakaan Brebes",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "migrate": "node src/migrations/run-migration.js",
+    "seed": "node src/seeders/run-seeder.js",
+    "db:reset": "npm run migrate && npm run seed"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.3",
+    "mysql2": "^3.2.0"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  }
+}
