@@ -19,6 +19,8 @@ app.use(cors({
         'http://localhost:5173', 
         'http://localhost:5174',
         process.env.FRONTEND_URL || 'https://your-frontend.up.railway.app'
+    ],
+    credentials: true
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
