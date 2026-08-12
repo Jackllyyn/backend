@@ -14,8 +14,16 @@ const JWT_EXPIRE = process.env.JWT_EXPIRE || '7d';
 
 // Middleware
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:5174'],
-    credentials: true
+    origin: [
+        'http://localhost:3000', 
+        'http://localhost:5173', 
+        'http://localhost:5174',
+        'https://spkahp.vercel.app',  // Tambahkan ini
+        'https://*.vercel.app'         // Tambahkan wildcard untuk semua subdomain
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
