@@ -5,34 +5,18 @@ const dotenv = require('dotenv');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
-if (process.env.NODE_ENV !== 'production') {
-    dotenv.config();
-}
+dotenv.config();
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this';
 const JWT_EXPIRE = process.env.JWT_EXPIRE || '7d';
 
-// ============================================================
-// MIDDLEWARE - CORS (HARDCODE)
-// ============================================================
+// Middleware
 app.use(cors({
-    origin: [
-        'http://localhost:3000',
-        'http://localhost:5173',
-        'http://localhost:5174',
-        'https://spkahp.vercel.app',
-        'https://spk-emjb0he9f-jackllyyns-projects.vercel.app',
-        'https://spk-ahp.vercel.app',
-        process.env.FRONTEND_URL
-    ].filter(Boolean),
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    origin: ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:5174'],
+    credentials: true
 }));
-
-// Tambahkan ini untuk handle preflight
-app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -40,11 +24,10 @@ app.use(express.urlencoded({ extended: true }));
 // KONEKSI DATABASE (Promise)
 // ============================================================
 const db = mysql.createPool({
-    host: process.env.DB_HOST || 'sakura.proxy.rlwy.net',
+    host: process.env.DB_HOST || 'localhost',
     user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || 'RueKWWlatIjajMLGYhTkZVJOUgjRpjRg',
-    database: process.env.DB_NAME || 'railway',
-    port: process.env.DB_PORT || 56322,
+    password: process.env.DB_PASSWORD || '',
+    database: process.env.DB_NAME || 'db_ahp',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
@@ -1409,6 +1392,10 @@ app.post('/api/alternatif/delete-all', verifyToken, isAdmin, async (req, res) =>
 // ========== ROUTE NILAI ALTERNATIF ===========================
 // ============================================================
 
+// ============================================================
+// ========== ROUTE NILAI ALTERNATIF ===========================
+// ============================================================
+
 // GET - Semua user bisa melihat
 app.get('/api/nilai-alternatif', async (req, res) => {
     try {
@@ -1445,30 +1432,15 @@ app.get('/api/nilai-alternatif/buku/:idBuku', async (req, res) => {
     }
 });
 
-// POST - User bisa menambah nilai alternatif
-app.post('/api/nilai-alternatif', verifyToken, isUser, async (req, res) => {
+// POST - Simpan nilai alternatif (Admin only)
+app.post('/api/nilai-alternatif', verifyToken, isAdmin, async (req, res) => {
     try {
         const { id_alternatif, id_sub } = req.body;
-        const id_user = req.user.id_user;
 
         if (!id_alternatif || !id_sub) {
             return res.status(400).json({
                 success: false,
                 message: 'ID alternatif dan ID sub-kriteria wajib diisi'
-            });
-        }
-
-        // Cek apakah user sudah pernah meminjam dan mengembalikan buku ini
-        const [peminjaman] = await db.query(
-            `SELECT * FROM tbl_peminjaman 
-             WHERE id_user = ? AND id_buku = ? AND status = 'dikembalikan'`,
-            [id_user, id_alternatif]
-        );
-
-        if (peminjaman.length === 0) {
-            return res.status(403).json({
-                success: false,
-                message: 'Anda belum meminjam buku ini atau belum dikembalikan'
             });
         }
 
@@ -1501,15 +1473,13 @@ app.post('/api/nilai-alternatif', verifyToken, isUser, async (req, res) => {
     }
 });
 
-// DELETE - User bisa menghapus nilai alternatif miliknya
-app.delete('/api/nilai-alternatif/:id', verifyToken, isUser, async (req, res) => {
+// DELETE single nilai - Admin only
+app.delete('/api/nilai-alternatif/:id', verifyToken, isAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        const id_user = req.user.id_user;
 
         const [nilai] = await db.query(
-            `SELECT na.* FROM tbl_nilai_alternatif na
-             WHERE na.id_nilai = ?`,
+            'SELECT * FROM tbl_nilai_alternatif WHERE id_nilai = ?',
             [id]
         );
 
@@ -1517,19 +1487,6 @@ app.delete('/api/nilai-alternatif/:id', verifyToken, isUser, async (req, res) =>
             return res.status(404).json({
                 success: false,
                 message: 'Nilai tidak ditemukan'
-            });
-        }
-
-        const [peminjaman] = await db.query(
-            `SELECT * FROM tbl_peminjaman 
-             WHERE id_user = ? AND id_buku = ? AND status = 'dikembalikan'`,
-            [id_user, nilai[0].id_alternatif]
-        );
-
-        if (peminjaman.length === 0) {
-            return res.status(403).json({
-                success: false,
-                message: 'Anda tidak memiliki akses untuk menghapus nilai ini'
             });
         }
 
@@ -1542,22 +1499,21 @@ app.delete('/api/nilai-alternatif/:id', verifyToken, isUser, async (req, res) =>
     }
 });
 
-// DELETE all nilai untuk buku tertentu
-app.delete('/api/nilai-alternatif/buku/:idBuku', verifyToken, isUser, async (req, res) => {
+// DELETE all nilai untuk buku tertentu - Admin only
+app.delete('/api/nilai-alternatif/buku/:idBuku', verifyToken, isAdmin, async (req, res) => {
     try {
         const { idBuku } = req.params;
-        const id_user = req.user.id_user;
 
-        const [peminjaman] = await db.query(
-            `SELECT * FROM tbl_peminjaman 
-             WHERE id_user = ? AND id_buku = ? AND status = 'dikembalikan'`,
-            [id_user, idBuku]
+        // Cek apakah buku ada
+        const [buku] = await db.query(
+            'SELECT id_alternatif FROM tbl_alternatif WHERE id_alternatif = ?',
+            [idBuku]
         );
 
-        if (peminjaman.length === 0) {
-            return res.status(403).json({
+        if (buku.length === 0) {
+            return res.status(404).json({
                 success: false,
-                message: 'Anda tidak memiliki akses untuk menghapus nilai ini'
+                message: 'Buku tidak ditemukan'
             });
         }
 
@@ -1575,8 +1531,6 @@ app.delete('/api/nilai-alternatif/buku/:idBuku', verifyToken, isUser, async (req
         res.status(500).json({ success: false, message: err.message });
     }
 });
-
-
 // GET nilai alternatif user
 app.get('/api/nilai-alternatif-user', verifyToken, isUser, async (req, res) => {
     try {
