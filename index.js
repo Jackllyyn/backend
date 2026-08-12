@@ -49,18 +49,16 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// DATABASE CONNECTION - PAKAI MYSQL_URL
+// DATABASE CONNECTION
 // ============================================================
 console.log('📊 ===== ENVIRONMENT VARIABLES =====');
 console.log('DB_HOST:', process.env.DB_HOST);
 console.log('DB_PORT:', process.env.DB_PORT);
 console.log('DB_NAME:', process.env.DB_NAME);
-console.log('MYSQL_URL:', process.env.MYSQL_URL ? '✅ ADA' : '❌ TIDAK ADA');
 console.log('=====================================');
 
 let db;
 
-// Coba dengan MYSQL_URL dulu
 if (process.env.MYSQL_URL) {
     console.log('🔄 Menggunakan MYSQL_URL...');
     db = mysql.createPool(process.env.MYSQL_URL);
@@ -68,7 +66,6 @@ if (process.env.MYSQL_URL) {
     console.log('🔄 Menggunakan MYSQL_PUBLIC_URL...');
     db = mysql.createPool(process.env.MYSQL_PUBLIC_URL);
 } else {
-    // Fallback ke konfigurasi manual
     console.log('🔄 Menggunakan konfigurasi manual...');
     const dbConfig = {
         host: process.env.DB_HOST || 'localhost',
@@ -87,29 +84,14 @@ if (process.env.MYSQL_URL) {
     db = mysql.createPool(dbConfig);
 }
 
-// Test koneksi
 (async () => {
     try {
         console.log('🔄 Mencoba koneksi ke database...');
         const [rows] = await db.query('SELECT 1 as connected');
         console.log('✅ Database terhubung!');
-        console.log('📊 Database:', process.env.DB_NAME || 'railway');
     } catch (err) {
         console.error('❌ Gagal koneksi ke database!');
         console.error('   Error:', err.message);
-        console.error('   Code:', err.code);
-        console.log('');
-        console.log('⚠️ PASTIKAN:');
-        console.log('   1. Database Railway sedang aktif');
-        console.log('   2. MYSQL_URL sudah di-set di environment variables');
-        console.log('   3. Koneksi internet stabil');
-        console.log('');
-        console.log('💡 TIPS: Jalankan dengan database LOKAL untuk development');
-        console.log('   Buat file .env dengan:');
-        console.log('   DB_HOST=localhost');
-        console.log('   DB_USER=root');
-        console.log('   DB_PASSWORD=');
-        console.log('   DB_NAME=db_ahp');
         process.exit(1);
     }
 })();
@@ -124,7 +106,8 @@ const verifyToken = async (req, res, next) => {
         if (!authHeader || !authHeader.startsWith('Bearer ')) {
             return res.status(401).json({
                 success: false,
-                message: 'Token tidak ditemukan. Silakan login terlebih dahulu.'
+                message: 'Token tidak ditemukan. Silakan login terlebih dahulu.',
+                code: 'TOKEN_NOT_FOUND'
             });
         }
 
@@ -141,7 +124,8 @@ const verifyToken = async (req, res, next) => {
             if (users.length === 0) {
                 return res.status(401).json({
                     success: false,
-                    message: 'User tidak ditemukan.'
+                    message: 'User tidak ditemukan.',
+                    code: 'USER_NOT_FOUND'
                 });
             }
 
@@ -151,13 +135,18 @@ const verifyToken = async (req, res, next) => {
             if (error.name === 'TokenExpiredError') {
                 return res.status(401).json({
                     success: false,
-                    message: 'Token telah kadaluarsa. Silakan login kembali.'
+                    message: 'Token telah kadaluarsa. Silakan login kembali.',
+                    code: 'TOKEN_EXPIRED'
                 });
             }
-            return res.status(401).json({
-                success: false,
-                message: 'Token tidak valid.'
-            });
+            if (error.name === 'JsonWebTokenError') {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Token tidak valid.',
+                    code: 'INVALID_TOKEN'
+                });
+            }
+            throw error;
         }
     } catch (error) {
         console.error('Auth middleware error:', error);
@@ -172,14 +161,16 @@ const isAdmin = (req, res, next) => {
     if (!req.user) {
         return res.status(401).json({
             success: false,
-            message: 'Unauthorized'
+            message: 'Unauthorized',
+            code: 'UNAUTHORIZED'
         });
     }
 
     if (req.user.role !== 'admin') {
         return res.status(403).json({
             success: false,
-            message: 'Akses ditolak. Hanya admin yang dapat mengakses.'
+            message: 'Akses ditolak. Hanya admin yang dapat mengakses.',
+            code: 'FORBIDDEN'
         });
     }
 
@@ -190,14 +181,16 @@ const isUser = (req, res, next) => {
     if (!req.user) {
         return res.status(401).json({
             success: false,
-            message: 'Unauthorized'
+            message: 'Unauthorized',
+            code: 'UNAUTHORIZED'
         });
     }
 
     if (req.user.role !== 'user' && req.user.role !== 'admin') {
         return res.status(403).json({
             success: false,
-            message: 'Akses ditolak.'
+            message: 'Akses ditolak.',
+            code: 'FORBIDDEN'
         });
     }
 
@@ -205,7 +198,7 @@ const isUser = (req, res, next) => {
 };
 
 // ============================================================
-// ROUTE UTAMA & HEALTH CHECK
+// ROUTE UTAMA
 // ============================================================
 app.get('/api/health', async (req, res) => {
     try {
@@ -214,7 +207,6 @@ app.get('/api/health', async (req, res) => {
             success: true,
             status: 'OK',
             database: 'Connected',
-            databaseName: process.env.DB_NAME || 'railway',
             timestamp: new Date().toISOString()
         });
     } catch (err) {
@@ -256,7 +248,7 @@ app.get('/api/test', async (req, res) => {
 });
 
 // ============================================================
-// ROUTE AUTH - LOGIN
+// ROUTE AUTH
 // ============================================================
 app.post('/api/auth/login', async (req, res) => {
     console.log('🔐 Login attempt:', req.body.username || 'unknown');
@@ -347,9 +339,6 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
-// ============================================================
-// REGISTER (Admin only)
-// ============================================================
 app.post('/api/auth/register', verifyToken, isAdmin, async (req, res) => {
     try {
         const { username, password, nama_lengkap, email, role } = req.body;
@@ -934,8 +923,10 @@ app.post('/api/alternatif/delete-all', verifyToken, isAdmin, async (req, res) =>
 });
 
 // ============================================================
-// ROUTE NILAI ALTERNATIF
+// ROUTE NILAI ALTERNATIF - DIPERBAIKI
 // ============================================================
+
+// GET semua nilai alternatif
 app.get('/api/nilai-alternatif', async (req, res) => {
     try {
         const [rows] = await db.query(`
@@ -953,10 +944,13 @@ app.get('/api/nilai-alternatif', async (req, res) => {
     }
 });
 
+// GET by buku - DIPERBAIKI dengan pengecekan buku
 app.get('/api/nilai-alternatif/buku/:idBuku', async (req, res) => {
     try {
         const { idBuku } = req.params;
+        console.log(`📊 GET nilai alternatif untuk buku ID: ${idBuku}`);
         
+        // Cek apakah buku ada
         const [buku] = await db.query(
             'SELECT id_alternatif FROM tbl_alternatif WHERE id_alternatif = ?',
             [idBuku]
@@ -965,7 +959,8 @@ app.get('/api/nilai-alternatif/buku/:idBuku', async (req, res) => {
         if (buku.length === 0) {
             return res.status(404).json({
                 success: false,
-                message: `Buku dengan ID ${idBuku} tidak ditemukan`
+                message: `Buku dengan ID ${idBuku} tidak ditemukan`,
+                code: 'BOOK_NOT_FOUND'
             });
         }
         
@@ -977,6 +972,8 @@ app.get('/api/nilai-alternatif/buku/:idBuku', async (req, res) => {
             WHERE na.id_alternatif = ?
         `, [idBuku]);
         
+        console.log(`✅ Ditemukan ${rows.length} nilai untuk buku ID ${idBuku}`);
+        
         res.json({ 
             success: true, 
             data: rows,
@@ -984,10 +981,14 @@ app.get('/api/nilai-alternatif/buku/:idBuku', async (req, res) => {
         });
     } catch (err) {
         console.error('Error GET /api/nilai-alternatif/buku/:id:', err);
-        res.status(500).json({ success: false, message: err.message });
+        res.status(500).json({ 
+            success: false, 
+            message: err.message 
+        });
     }
 });
 
+// POST - Simpan nilai alternatif
 app.post('/api/nilai-alternatif', verifyToken, isUser, async (req, res) => {
     try {
         const { id_alternatif, id_sub } = req.body;
@@ -1041,6 +1042,7 @@ app.post('/api/nilai-alternatif', verifyToken, isUser, async (req, res) => {
     }
 });
 
+// DELETE - Hapus nilai alternatif
 app.delete('/api/nilai-alternatif/:id', verifyToken, isUser, async (req, res) => {
     try {
         const { id } = req.params;
@@ -1081,6 +1083,7 @@ app.delete('/api/nilai-alternatif/:id', verifyToken, isUser, async (req, res) =>
     }
 });
 
+// DELETE all nilai untuk buku tertentu
 app.delete('/api/nilai-alternatif/buku/:idBuku', verifyToken, isUser, async (req, res) => {
     try {
         const { idBuku } = req.params;
@@ -1371,7 +1374,391 @@ app.delete('/api/pairwise-sub/truncate', verifyToken, isAdmin, async (req, res) 
 });
 
 // ============================================================
-// ROUTE NORMALISASI
+// ROUTE NORMALISASI SUB
+// ============================================================
+app.get('/api/normalisasi-sub/:idKriteria', async (req, res) => {
+    try {
+        const { idKriteria } = req.params;
+
+        const [subs] = await db.query(
+            'SELECT * FROM tbl_sub_kriteria WHERE id_kriteria = ? ORDER BY id_sub',
+            [idKriteria]
+        );
+
+        if (subs.length < 2) {
+            return res.status(400).json({
+                success: false,
+                message: `Minimal 2 sub-kriteria untuk normalisasi (saat ini ${subs.length})`
+            });
+        }
+
+        const [pairwise] = await db.query(
+            'SELECT * FROM tbl_pairwise_sub WHERE id_kriteria = ?',
+            [idKriteria]
+        );
+
+        const n = subs.length;
+        const subIds = subs.map(s => s.id_sub);
+        const subNames = subs.map(s => s.nama_sub);
+
+        const matrix = [];
+        for (let i = 0; i < n; i++) {
+            matrix[i] = [];
+            for (let j = 0; j < n; j++) {
+                if (i === j) {
+                    matrix[i][j] = 1;
+                } else {
+                    const found = pairwise.find(
+                        p => p.sub_1 === subIds[i] && p.sub_2 === subIds[j]
+                    );
+                    if (found) {
+                        matrix[i][j] = parseFloat(found.nilai);
+                    } else {
+                        const foundReverse = pairwise.find(
+                            p => p.sub_1 === subIds[j] && p.sub_2 === subIds[i]
+                        );
+                        matrix[i][j] = foundReverse ? 1 / parseFloat(foundReverse.nilai) : 3;
+                    }
+                }
+            }
+        }
+
+        const totalPerKolom = [];
+        for (let j = 0; j < n; j++) {
+            let sum = 0;
+            for (let i = 0; i < n; i++) {
+                sum += matrix[i][j];
+            }
+            totalPerKolom[j] = parseFloat(sum.toFixed(4));
+        }
+
+        const normalizedMatrix = [];
+        for (let i = 0; i < n; i++) {
+            normalizedMatrix[i] = [];
+            for (let j = 0; j < n; j++) {
+                normalizedMatrix[i][j] = parseFloat((matrix[i][j] / totalPerKolom[j]).toFixed(4));
+            }
+        }
+
+        const bobotSub = [];
+        for (let i = 0; i < n; i++) {
+            let sum = 0;
+            for (let j = 0; j < n; j++) {
+                sum += normalizedMatrix[i][j];
+            }
+            bobotSub[i] = parseFloat((sum / n).toFixed(4));
+        }
+
+        res.json({
+            success: true,
+            data: {
+                subs: subs.map((s, i) => ({
+                    id_sub: s.id_sub,
+                    nama_sub: s.nama_sub,
+                    bobot: bobotSub[i],
+                    bobotPersen: (bobotSub[i] * 100).toFixed(2) + '%'
+                })),
+                matrix: {
+                    labels: subNames,
+                    data: matrix
+                }
+            }
+        });
+
+    } catch (err) {
+        console.error('Error GET /api/normalisasi-sub/:id:', err);
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+app.post('/api/normalisasi-sub/:idKriteria/simpan', verifyToken, isAdmin, async (req, res) => {
+    const conn = await db.getConnection();
+    try {
+        const { idKriteria } = req.params;
+
+        const [subs] = await conn.query(
+            'SELECT * FROM tbl_sub_kriteria WHERE id_kriteria = ? ORDER BY id_sub',
+            [idKriteria]
+        );
+
+        if (subs.length < 2) {
+            conn.release();
+            return res.status(400).json({
+                success: false,
+                message: `Minimal 2 sub-kriteria untuk normalisasi (saat ini ${subs.length})`
+            });
+        }
+
+        const [pairwise] = await conn.query(
+            'SELECT * FROM tbl_pairwise_sub WHERE id_kriteria = ?',
+            [idKriteria]
+        );
+
+        const n = subs.length;
+        const subIds = subs.map(s => s.id_sub);
+
+        const matrix = [];
+        for (let i = 0; i < n; i++) {
+            matrix[i] = [];
+            for (let j = 0; j < n; j++) {
+                if (i === j) {
+                    matrix[i][j] = 1;
+                } else {
+                    const found = pairwise.find(
+                        p => p.sub_1 === subIds[i] && p.sub_2 === subIds[j]
+                    );
+                    if (found) {
+                        matrix[i][j] = parseFloat(found.nilai);
+                    } else {
+                        const foundReverse = pairwise.find(
+                            p => p.sub_1 === subIds[j] && p.sub_2 === subIds[i]
+                        );
+                        matrix[i][j] = foundReverse ? 1 / parseFloat(foundReverse.nilai) : 3;
+                    }
+                }
+            }
+        }
+
+        const totalPerKolom = [];
+        for (let j = 0; j < n; j++) {
+            let sum = 0;
+            for (let i = 0; i < n; i++) {
+                sum += matrix[i][j];
+            }
+            totalPerKolom[j] = parseFloat(sum.toFixed(4));
+        }
+
+        const normalizedMatrix = [];
+        for (let i = 0; i < n; i++) {
+            normalizedMatrix[i] = [];
+            for (let j = 0; j < n; j++) {
+                normalizedMatrix[i][j] = parseFloat((matrix[i][j] / totalPerKolom[j]).toFixed(4));
+            }
+        }
+
+        const bobotSub = [];
+        for (let i = 0; i < n; i++) {
+            let sum = 0;
+            for (let j = 0; j < n; j++) {
+                sum += normalizedMatrix[i][j];
+            }
+            bobotSub[i] = parseFloat((sum / n).toFixed(4));
+        }
+
+        await conn.beginTransaction();
+        for (let i = 0; i < subIds.length; i++) {
+            await conn.query(
+                'UPDATE tbl_sub_kriteria SET bobot_sub = ? WHERE id_sub = ?',
+                [bobotSub[i], subIds[i]]
+            );
+        }
+        await conn.commit();
+
+        res.json({
+            success: true,
+            message: `Bobot sub-kriteria berhasil disimpan!`,
+            data: subs.map((s, i) => ({
+                id_sub: s.id_sub,
+                nama_sub: s.nama_sub,
+                bobot: bobotSub[i]
+            }))
+        });
+
+    } catch (err) {
+        await conn.rollback();
+        console.error('Error POST /api/normalisasi-sub/:id/simpan:', err);
+        res.status(500).json({ success: false, message: err.message });
+    } finally {
+        conn.release();
+    }
+});
+
+app.post('/api/normalisasi-sub/simpan-semua', verifyToken, isAdmin, async (req, res) => {
+    const conn = await db.getConnection();
+    try {
+        const [kriteria] = await conn.query('SELECT * FROM tbl_kriteria ORDER BY id_kriteria');
+
+        if (kriteria.length === 0) {
+            conn.release();
+            return res.status(400).json({
+                success: false,
+                message: 'Belum ada kriteria'
+            });
+        }
+
+        const berhasil = [];
+        const dilewati = [];
+
+        await conn.beginTransaction();
+
+        for (const k of kriteria) {
+            const [subs] = await conn.query(
+                'SELECT * FROM tbl_sub_kriteria WHERE id_kriteria = ? ORDER BY id_sub',
+                [k.id_kriteria]
+            );
+
+            if (subs.length < 2) {
+                dilewati.push({
+                    id_kriteria: k.id_kriteria,
+                    nama_kriteria: k.nama_kriteria,
+                    alasan: `Hanya ${subs.length} sub-kriteria (minimal 2)`
+                });
+                continue;
+            }
+
+            const [pairwise] = await conn.query(
+                'SELECT * FROM tbl_pairwise_sub WHERE id_kriteria = ?',
+                [k.id_kriteria]
+            );
+
+            const n = subs.length;
+            const subIds = subs.map(s => s.id_sub);
+
+            const matrix = [];
+            for (let i = 0; i < n; i++) {
+                matrix[i] = [];
+                for (let j = 0; j < n; j++) {
+                    if (i === j) {
+                        matrix[i][j] = 1;
+                    } else {
+                        const found = pairwise.find(
+                            p => p.sub_1 === subIds[i] && p.sub_2 === subIds[j]
+                        );
+                        if (found) {
+                            matrix[i][j] = parseFloat(found.nilai);
+                        } else {
+                            const foundReverse = pairwise.find(
+                                p => p.sub_1 === subIds[j] && p.sub_2 === subIds[i]
+                            );
+                            matrix[i][j] = foundReverse ? 1 / parseFloat(foundReverse.nilai) : 3;
+                        }
+                    }
+                }
+            }
+
+            const totalPerKolom = [];
+            for (let j = 0; j < n; j++) {
+                let sum = 0;
+                for (let i = 0; i < n; i++) {
+                    sum += matrix[i][j];
+                }
+                totalPerKolom[j] = parseFloat(sum.toFixed(4));
+            }
+
+            const normalizedMatrix = [];
+            for (let i = 0; i < n; i++) {
+                normalizedMatrix[i] = [];
+                for (let j = 0; j < n; j++) {
+                    normalizedMatrix[i][j] = parseFloat((matrix[i][j] / totalPerKolom[j]).toFixed(4));
+                }
+            }
+
+            const bobotSub = [];
+            for (let i = 0; i < n; i++) {
+                let sum = 0;
+                for (let j = 0; j < n; j++) {
+                    sum += normalizedMatrix[i][j];
+                }
+                bobotSub[i] = parseFloat((sum / n).toFixed(4));
+            }
+
+            for (let i = 0; i < subIds.length; i++) {
+                await conn.query(
+                    'UPDATE tbl_sub_kriteria SET bobot_sub = ? WHERE id_sub = ?',
+                    [bobotSub[i], subIds[i]]
+                );
+            }
+
+            berhasil.push({
+                id_kriteria: k.id_kriteria,
+                nama_kriteria: k.nama_kriteria,
+                jumlah_sub: subs.length
+            });
+        }
+
+        await conn.commit();
+
+        res.json({
+            success: true,
+            message: `✅ ${berhasil.length} kriteria berhasil disimpan, ${dilewati.length} dilewati`,
+            data: {
+                berhasil: berhasil,
+                dilewati: dilewati
+            }
+        });
+
+    } catch (err) {
+        await conn.rollback();
+        console.error('Error POST /api/normalisasi-sub/simpan-semua:', err);
+        res.status(500).json({ success: false, message: err.message });
+    } finally {
+        conn.release();
+    }
+});
+
+// ============================================================
+// ROUTE HITUNG GLOBAL
+// ============================================================
+app.post('/api/hitung-global', verifyToken, isAdmin, async (req, res) => {
+    const conn = await db.getConnection();
+    try {
+        const [kriteria] = await conn.query('SELECT * FROM tbl_kriteria');
+        const [subKriteria] = await conn.query('SELECT * FROM tbl_sub_kriteria');
+
+        if (kriteria.length === 0) {
+            conn.release();
+            return res.status(400).json({ success: false, message: 'Belum ada kriteria' });
+        }
+        if (subKriteria.length === 0) {
+            conn.release();
+            return res.status(400).json({ success: false, message: 'Belum ada sub-kriteria' });
+        }
+
+        const bobotKriteriaMap = {};
+        for (const k of kriteria) {
+            bobotKriteriaMap[k.id_kriteria] = parseFloat(k.bobot) || 0;
+        }
+
+        await conn.beginTransaction();
+        let updatedCount = 0;
+        const hasilUpdate = [];
+
+        for (const sub of subKriteria) {
+            const bobotKrit = bobotKriteriaMap[sub.id_kriteria] || 0;
+            const bobotSub = parseFloat(sub.bobot_sub) || 0;
+            const bobotGlobal = parseFloat((bobotKrit * bobotSub).toFixed(6));
+
+            await conn.query(
+                'UPDATE tbl_sub_kriteria SET bobot_global = ? WHERE id_sub = ?',
+                [bobotGlobal, sub.id_sub]
+            );
+            updatedCount++;
+            hasilUpdate.push({
+                id_sub: sub.id_sub,
+                nama_sub: sub.nama_sub,
+                bobot_global: bobotGlobal
+            });
+        }
+
+        await conn.commit();
+        conn.release();
+
+        res.json({
+            success: true,
+            message: `✅ ${updatedCount} sub-kriteria diperbarui`,
+            data: hasilUpdate
+        });
+
+    } catch (err) {
+        await conn.rollback();
+        conn.release();
+        console.error('Error POST /api/hitung-global:', err);
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+// ============================================================
+// ROUTE NORMALISASI KRITERIA
 // ============================================================
 app.get('/api/normalisasi', async (req, res) => {
     try {
@@ -1599,215 +1986,6 @@ app.get('/api/stats', async (req, res) => {
         });
     } catch (err) {
         console.error('Error GET /api/stats:', err);
-        res.status(500).json({ success: false, message: err.message });
-    }
-});
-
-// ============================================================
-// ROUTE DASHBOARD
-// ============================================================
-app.get('/api/dashboard/stats', verifyToken, async (req, res) => {
-    try {
-        const [totalBuku] = await db.query('SELECT COUNT(*) as total FROM tbl_alternatif');
-        const [totalDipinjam] = await db.query(
-            'SELECT COUNT(*) as total FROM tbl_peminjaman WHERE status = "dipinjam"'
-        );
-        const [totalUser] = await db.query('SELECT COUNT(*) as total FROM tbl_user WHERE role = "user"');
-
-        const [populer] = await db.query(`
-            SELECT b.id_alternatif, b.judul_buku, b.penulis, AVG(r.rating) as avg_rating, COUNT(r.id_rating) as total_rating
-            FROM tbl_alternatif b
-            LEFT JOIN tbl_rating r ON b.id_alternatif = r.id_buku
-            GROUP BY b.id_alternatif
-            HAVING total_rating > 0
-            ORDER BY avg_rating DESC
-            LIMIT 5
-        `);
-
-        const [peminjamanTerbaru] = await db.query(`
-            SELECT p.*, u.nama_lengkap, u.username, b.judul_buku
-            FROM tbl_peminjaman p
-            JOIN tbl_user u ON p.id_user = u.id_user
-            JOIN tbl_alternatif b ON p.id_buku = b.id_alternatif
-            ORDER BY p.created_at DESC
-            LIMIT 5
-        `);
-
-        res.json({
-            success: true,
-            data: {
-                totalBuku: totalBuku[0].total || 0,
-                totalDipinjam: totalDipinjam[0].total || 0,
-                totalUser: totalUser[0].total || 0,
-                bukuPopuler: populer,
-                peminjamanTerbaru: peminjamanTerbaru
-            }
-        });
-
-    } catch (error) {
-        console.error('Error GET /api/dashboard/stats:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Terjadi kesalahan pada server'
-        });
-    }
-});
-
-// ============================================================
-// ROUTE HITUNG GLOBAL
-// ============================================================
-app.post('/api/hitung-global', verifyToken, isAdmin, async (req, res) => {
-    const conn = await db.getConnection();
-    try {
-        const [kriteria] = await conn.query('SELECT * FROM tbl_kriteria');
-        const [subKriteria] = await conn.query('SELECT * FROM tbl_sub_kriteria');
-
-        if (kriteria.length === 0) {
-            conn.release();
-            return res.status(400).json({ success: false, message: 'Belum ada kriteria' });
-        }
-        if (subKriteria.length === 0) {
-            conn.release();
-            return res.status(400).json({ success: false, message: 'Belum ada sub-kriteria' });
-        }
-
-        const bobotKriteriaMap = {};
-        for (const k of kriteria) {
-            bobotKriteriaMap[k.id_kriteria] = parseFloat(k.bobot) || 0;
-        }
-
-        await conn.beginTransaction();
-        let updatedCount = 0;
-        const hasilUpdate = [];
-
-        for (const sub of subKriteria) {
-            const bobotKrit = bobotKriteriaMap[sub.id_kriteria] || 0;
-            const bobotSub = parseFloat(sub.bobot_sub) || 0;
-            const bobotGlobal = parseFloat((bobotKrit * bobotSub).toFixed(6));
-
-            await conn.query(
-                'UPDATE tbl_sub_kriteria SET bobot_global = ? WHERE id_sub = ?',
-                [bobotGlobal, sub.id_sub]
-            );
-            updatedCount++;
-            hasilUpdate.push({
-                id_sub: sub.id_sub,
-                nama_sub: sub.nama_sub,
-                bobot_global: bobotGlobal
-            });
-        }
-
-        await conn.commit();
-        conn.release();
-
-        res.json({
-            success: true,
-            message: `✅ ${updatedCount} sub-kriteria diperbarui`,
-            data: hasilUpdate
-        });
-
-    } catch (err) {
-        await conn.rollback();
-        conn.release();
-        console.error('Error POST /api/hitung-global:', err);
-        res.status(500).json({ success: false, message: err.message });
-    }
-});
-
-// ============================================================
-// ROUTE NORMALISASI SUB
-// ============================================================
-app.get('/api/normalisasi-sub/:idKriteria', async (req, res) => {
-    try {
-        const { idKriteria } = req.params;
-
-        const [subs] = await db.query(
-            'SELECT * FROM tbl_sub_kriteria WHERE id_kriteria = ? ORDER BY id_sub',
-            [idKriteria]
-        );
-
-        if (subs.length < 2) {
-            return res.status(400).json({
-                success: false,
-                message: `Minimal 2 sub-kriteria untuk normalisasi (saat ini ${subs.length})`
-            });
-        }
-
-        const [pairwise] = await db.query(
-            'SELECT * FROM tbl_pairwise_sub WHERE id_kriteria = ?',
-            [idKriteria]
-        );
-
-        const n = subs.length;
-        const subIds = subs.map(s => s.id_sub);
-        const subNames = subs.map(s => s.nama_sub);
-
-        const matrix = [];
-        for (let i = 0; i < n; i++) {
-            matrix[i] = [];
-            for (let j = 0; j < n; j++) {
-                if (i === j) {
-                    matrix[i][j] = 1;
-                } else {
-                    const found = pairwise.find(
-                        p => p.sub_1 === subIds[i] && p.sub_2 === subIds[j]
-                    );
-                    if (found) {
-                        matrix[i][j] = parseFloat(found.nilai);
-                    } else {
-                        const foundReverse = pairwise.find(
-                            p => p.sub_1 === subIds[j] && p.sub_2 === subIds[i]
-                        );
-                        matrix[i][j] = foundReverse ? 1 / parseFloat(foundReverse.nilai) : 3;
-                    }
-                }
-            }
-        }
-
-        const totalPerKolom = [];
-        for (let j = 0; j < n; j++) {
-            let sum = 0;
-            for (let i = 0; i < n; i++) {
-                sum += matrix[i][j];
-            }
-            totalPerKolom[j] = parseFloat(sum.toFixed(4));
-        }
-
-        const normalizedMatrix = [];
-        for (let i = 0; i < n; i++) {
-            normalizedMatrix[i] = [];
-            for (let j = 0; j < n; j++) {
-                normalizedMatrix[i][j] = parseFloat((matrix[i][j] / totalPerKolom[j]).toFixed(4));
-            }
-        }
-
-        const bobotSub = [];
-        for (let i = 0; i < n; i++) {
-            let sum = 0;
-            for (let j = 0; j < n; j++) {
-                sum += normalizedMatrix[i][j];
-            }
-            bobotSub[i] = parseFloat((sum / n).toFixed(4));
-        }
-
-        res.json({
-            success: true,
-            data: {
-                subs: subs.map((s, i) => ({
-                    id_sub: s.id_sub,
-                    nama_sub: s.nama_sub,
-                    bobot: bobotSub[i],
-                    bobotPersen: (bobotSub[i] * 100).toFixed(2) + '%'
-                })),
-                matrix: {
-                    labels: subNames,
-                    data: matrix
-                }
-            }
-        });
-
-    } catch (err) {
-        console.error('Error GET /api/normalisasi-sub/:id:', err);
         res.status(500).json({ success: false, message: err.message });
     }
 });
@@ -2535,6 +2713,56 @@ app.get('/api/rating/all', verifyToken, isAdmin, async (req, res) => {
 
     } catch (error) {
         console.error('Error GET /api/rating/all:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Terjadi kesalahan pada server'
+        });
+    }
+});
+
+// ============================================================
+// ROUTE DASHBOARD
+// ============================================================
+app.get('/api/dashboard/stats', verifyToken, async (req, res) => {
+    try {
+        const [totalBuku] = await db.query('SELECT COUNT(*) as total FROM tbl_alternatif');
+        const [totalDipinjam] = await db.query(
+            'SELECT COUNT(*) as total FROM tbl_peminjaman WHERE status = "dipinjam"'
+        );
+        const [totalUser] = await db.query('SELECT COUNT(*) as total FROM tbl_user WHERE role = "user"');
+
+        const [populer] = await db.query(`
+            SELECT b.id_alternatif, b.judul_buku, b.penulis, AVG(r.rating) as avg_rating, COUNT(r.id_rating) as total_rating
+            FROM tbl_alternatif b
+            LEFT JOIN tbl_rating r ON b.id_alternatif = r.id_buku
+            GROUP BY b.id_alternatif
+            HAVING total_rating > 0
+            ORDER BY avg_rating DESC
+            LIMIT 5
+        `);
+
+        const [peminjamanTerbaru] = await db.query(`
+            SELECT p.*, u.nama_lengkap, u.username, b.judul_buku
+            FROM tbl_peminjaman p
+            JOIN tbl_user u ON p.id_user = u.id_user
+            JOIN tbl_alternatif b ON p.id_buku = b.id_alternatif
+            ORDER BY p.created_at DESC
+            LIMIT 5
+        `);
+
+        res.json({
+            success: true,
+            data: {
+                totalBuku: totalBuku[0].total || 0,
+                totalDipinjam: totalDipinjam[0].total || 0,
+                totalUser: totalUser[0].total || 0,
+                bukuPopuler: populer,
+                peminjamanTerbaru: peminjamanTerbaru
+            }
+        });
+
+    } catch (error) {
+        console.error('Error GET /api/dashboard/stats:', error);
         res.status(500).json({
             success: false,
             message: 'Terjadi kesalahan pada server'
