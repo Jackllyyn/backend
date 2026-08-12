@@ -923,10 +923,10 @@ app.post('/api/alternatif/delete-all', verifyToken, isAdmin, async (req, res) =>
 });
 
 // ============================================================
-// ROUTE NILAI ALTERNATIF - DIPERBAIKI
+// ROUTE NILAI ALTERNATIF - PUBLIC (TANPA AUTH UNTUK GET)
 // ============================================================
 
-// GET semua nilai alternatif
+// GET semua nilai alternatif - PUBLIC
 app.get('/api/nilai-alternatif', async (req, res) => {
     try {
         const [rows] = await db.query(`
@@ -944,7 +944,7 @@ app.get('/api/nilai-alternatif', async (req, res) => {
     }
 });
 
-// GET by buku - DIPERBAIKI dengan pengecekan buku
+// GET by buku - PUBLIC (tanpa auth)
 app.get('/api/nilai-alternatif/buku/:idBuku', async (req, res) => {
     try {
         const { idBuku } = req.params;
@@ -988,11 +988,16 @@ app.get('/api/nilai-alternatif/buku/:idBuku', async (req, res) => {
     }
 });
 
-// POST - Simpan nilai alternatif
-app.post('/api/nilai-alternatif', verifyToken, isUser, async (req, res) => {
+// ============================================================
+// ROUTE NILAI ALTERNATIF - UNTUK ADMIN & USER (DENGAN AUTH)
+// ============================================================
+
+// POST - Simpan nilai alternatif (Admin & User)
+app.post('/api/nilai-alternatif', verifyToken, async (req, res) => {
     try {
         const { id_alternatif, id_sub } = req.body;
         const id_user = req.user.id_user;
+        const role = req.user.role;
 
         if (!id_alternatif || !id_sub) {
             return res.status(400).json({
@@ -1001,19 +1006,49 @@ app.post('/api/nilai-alternatif', verifyToken, isUser, async (req, res) => {
             });
         }
 
-        const [peminjaman] = await db.query(
-            `SELECT * FROM tbl_peminjaman 
-             WHERE id_user = ? AND id_buku = ? AND status = 'dikembalikan'`,
-            [id_user, id_alternatif]
+        // Cek apakah buku ada
+        const [buku] = await db.query(
+            'SELECT id_alternatif FROM tbl_alternatif WHERE id_alternatif = ?',
+            [id_alternatif]
         );
 
-        if (peminjaman.length === 0) {
-            return res.status(403).json({
+        if (buku.length === 0) {
+            return res.status(404).json({
                 success: false,
-                message: 'Anda belum meminjam buku ini atau belum dikembalikan'
+                message: 'Buku tidak ditemukan'
             });
         }
 
+        // Cek apakah sub-kriteria ada
+        const [sub] = await db.query(
+            'SELECT id_sub FROM tbl_sub_kriteria WHERE id_sub = ?',
+            [id_sub]
+        );
+
+        if (sub.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Sub-kriteria tidak ditemukan'
+            });
+        }
+
+        // Jika USER (bukan admin), cek apakah sudah pernah meminjam buku ini
+        if (role !== 'admin') {
+            const [peminjaman] = await db.query(
+                `SELECT * FROM tbl_peminjaman 
+                 WHERE id_user = ? AND id_buku = ? AND status = 'dikembalikan'`,
+                [id_user, id_alternatif]
+            );
+
+            if (peminjaman.length === 0) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Anda belum meminjam buku ini atau belum dikembalikan. Hanya admin yang bisa menilai semua buku.'
+                });
+            }
+        }
+
+        // Cek apakah sudah ada nilai untuk kombinasi ini
         const [existing] = await db.query(
             'SELECT * FROM tbl_nilai_alternatif WHERE id_alternatif = ? AND id_sub = ?',
             [id_alternatif, id_sub]
@@ -1042,11 +1077,12 @@ app.post('/api/nilai-alternatif', verifyToken, isUser, async (req, res) => {
     }
 });
 
-// DELETE - Hapus nilai alternatif
-app.delete('/api/nilai-alternatif/:id', verifyToken, isUser, async (req, res) => {
+// DELETE - Hapus nilai alternatif (Admin & User)
+app.delete('/api/nilai-alternatif/:id', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
         const id_user = req.user.id_user;
+        const role = req.user.role;
 
         const [nilai] = await db.query(
             `SELECT na.* FROM tbl_nilai_alternatif na
@@ -1061,17 +1097,20 @@ app.delete('/api/nilai-alternatif/:id', verifyToken, isUser, async (req, res) =>
             });
         }
 
-        const [peminjaman] = await db.query(
-            `SELECT * FROM tbl_peminjaman 
-             WHERE id_user = ? AND id_buku = ? AND status = 'dikembalikan'`,
-            [id_user, nilai[0].id_alternatif]
-        );
+        // Jika USER (bukan admin), cek apakah dia pemilik nilai
+        if (role !== 'admin') {
+            const [peminjaman] = await db.query(
+                `SELECT * FROM tbl_peminjaman 
+                 WHERE id_user = ? AND id_buku = ? AND status = 'dikembalikan'`,
+                [id_user, nilai[0].id_alternatif]
+            );
 
-        if (peminjaman.length === 0) {
-            return res.status(403).json({
-                success: false,
-                message: 'Anda tidak memiliki akses untuk menghapus nilai ini'
-            });
+            if (peminjaman.length === 0) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Anda tidak memiliki akses untuk menghapus nilai ini'
+                });
+            }
         }
 
         await db.query('DELETE FROM tbl_nilai_alternatif WHERE id_nilai = ?', [id]);
@@ -1083,23 +1122,27 @@ app.delete('/api/nilai-alternatif/:id', verifyToken, isUser, async (req, res) =>
     }
 });
 
-// DELETE all nilai untuk buku tertentu
-app.delete('/api/nilai-alternatif/buku/:idBuku', verifyToken, isUser, async (req, res) => {
+// DELETE all nilai untuk buku tertentu (Admin & User)
+app.delete('/api/nilai-alternatif/buku/:idBuku', verifyToken, async (req, res) => {
     try {
         const { idBuku } = req.params;
         const id_user = req.user.id_user;
+        const role = req.user.role;
 
-        const [peminjaman] = await db.query(
-            `SELECT * FROM tbl_peminjaman 
-             WHERE id_user = ? AND id_buku = ? AND status = 'dikembalikan'`,
-            [id_user, idBuku]
-        );
+        // Jika USER (bukan admin), cek apakah dia pemilik
+        if (role !== 'admin') {
+            const [peminjaman] = await db.query(
+                `SELECT * FROM tbl_peminjaman 
+                 WHERE id_user = ? AND id_buku = ? AND status = 'dikembalikan'`,
+                [id_user, idBuku]
+            );
 
-        if (peminjaman.length === 0) {
-            return res.status(403).json({
-                success: false,
-                message: 'Anda tidak memiliki akses untuk menghapus nilai ini'
-            });
+            if (peminjaman.length === 0) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Anda tidak memiliki akses untuk menghapus nilai ini'
+                });
+            }
         }
 
         await db.query(
@@ -1118,9 +1161,9 @@ app.delete('/api/nilai-alternatif/buku/:idBuku', verifyToken, isUser, async (req
 });
 
 // ============================================================
-// ROUTE NILAI ALTERNATIF USER
+// ROUTE NILAI ALTERNATIF USER (UNTUK USER BIASA)
 // ============================================================
-app.get('/api/nilai-alternatif-user', verifyToken, isUser, async (req, res) => {
+app.get('/api/nilai-alternatif-user', verifyToken, async (req, res) => {
     try {
         const userId = req.query.userId || req.user.id_user;
         const [rows] = await db.query(
@@ -1133,7 +1176,7 @@ app.get('/api/nilai-alternatif-user', verifyToken, isUser, async (req, res) => {
     }
 });
 
-app.post('/api/nilai-alternatif-user', verifyToken, isUser, async (req, res) => {
+app.post('/api/nilai-alternatif-user', verifyToken, async (req, res) => {
     try {
         const { id_alternatif, id_sub, nilai = 1 } = req.body;
         const id_user = req.user.id_user;
@@ -1161,7 +1204,7 @@ app.post('/api/nilai-alternatif-user', verifyToken, isUser, async (req, res) => 
     }
 });
 
-app.delete('/api/nilai-alternatif-user/:id', verifyToken, isUser, async (req, res) => {
+app.delete('/api/nilai-alternatif-user/:id', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
         const id_user = req.user.id_user;
@@ -1186,7 +1229,7 @@ app.delete('/api/nilai-alternatif-user/:id', verifyToken, isUser, async (req, re
     }
 });
 
-app.delete('/api/nilai-alternatif-user/buku/:idBuku', verifyToken, isUser, async (req, res) => {
+app.delete('/api/nilai-alternatif-user/buku/:idBuku', verifyToken, async (req, res) => {
     try {
         const { idBuku } = req.params;
         const id_user = req.user.id_user;
@@ -2041,7 +2084,7 @@ app.get('/api/stats', async (req, res) => {
 // ============================================================
 // ROUTE PEMINJAMAN - USER
 // ============================================================
-app.post('/api/peminjaman', verifyToken, isUser, async (req, res) => {
+app.post('/api/peminjaman', verifyToken, async (req, res) => {
     try {
         const { id_buku, tanggal_pinjam } = req.body;
         const id_user = req.user.id_user;
@@ -2109,7 +2152,7 @@ app.post('/api/peminjaman', verifyToken, isUser, async (req, res) => {
     }
 });
 
-app.get('/api/peminjaman/riwayat', verifyToken, isUser, async (req, res) => {
+app.get('/api/peminjaman/riwayat', verifyToken, async (req, res) => {
     try {
         const id_user = req.user.id_user;
 
@@ -2136,7 +2179,7 @@ app.get('/api/peminjaman/riwayat', verifyToken, isUser, async (req, res) => {
     }
 });
 
-app.put('/api/peminjaman/:id/kembali', verifyToken, isUser, async (req, res) => {
+app.put('/api/peminjaman/:id/kembali', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
         const id_user = req.user.id_user;
@@ -2566,7 +2609,7 @@ app.delete('/api/peminjaman/admin/:id', verifyToken, isAdmin, async (req, res) =
 // ============================================================
 // ROUTE RATING
 // ============================================================
-app.post('/api/rating', verifyToken, isUser, async (req, res) => {
+app.post('/api/rating', verifyToken, async (req, res) => {
     try {
         const { id_buku, rating, komentar } = req.body;
         const id_user = req.user.id_user;
@@ -2669,7 +2712,7 @@ app.get('/api/rating/buku/:id', async (req, res) => {
     }
 });
 
-app.get('/api/rating/user', verifyToken, isUser, async (req, res) => {
+app.get('/api/rating/user', verifyToken, async (req, res) => {
     try {
         const id_user = req.user.id_user;
 
