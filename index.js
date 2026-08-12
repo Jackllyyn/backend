@@ -12,21 +12,61 @@ const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this';
 const JWT_EXPIRE = process.env.JWT_EXPIRE || '7d';
 
-// Middleware
-app.use(cors({
-    origin: [
-        'http://localhost:3000', 
-        'http://localhost:5173', 
-        'http://localhost:5174',
-        'https://spkahp.vercel.app',  // Tambahkan ini
-        'https://*.vercel.app'         // Tambahkan wildcard untuk semua subdomain
-    ],
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
+// ============================================================
+// MIDDLEWARE CORS - DIPERBAIKI
+// ============================================================
+const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'https://spkahp.vercel.app',
+    'https://*.vercel.app'
+];
+
+// CORS Middleware lengkap
+app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    
+    // Cek apakah origin diizinkan
+    const isAllowed = allowedOrigins.some(allowed => {
+        if (allowed.includes('*')) {
+            const pattern = allowed.replace('*', '.*');
+            return new RegExp(`^${pattern}$`).test(origin);
+        }
+        return allowed === origin;
+    });
+
+    if (isAllowed && origin) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+    } else {
+        // Untuk development, izinkan semua
+        res.setHeader('Access-Control-Allow-Origin', '*');
+    }
+    
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
+    
+    // Handle preflight
+    if (req.method === 'OPTIONS') {
+        return res.status(204).end();
+    }
+    
+    next();
+});
+
+// Middleware untuk parsing JSON
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// ============================================================
+// LOGGING REQUEST
+// ============================================================
+app.use((req, res, next) => {
+    console.log(`📝 ${req.method} ${req.url} - Origin: ${req.headers.origin || 'local'}`);
+    next();
+});
 
 // ============================================================
 // KONEKSI DATABASE (Promise)
@@ -62,7 +102,7 @@ const db = mysql.createPool({
 // MIDDLEWARE AUTH
 // ============================================================
 
-// Verify JWT Token
+// Verify JWT Token - DIPERBAIKI
 const verifyToken = async (req, res, next) => {
     try {
         const authHeader = req.headers.authorization;
@@ -70,7 +110,8 @@ const verifyToken = async (req, res, next) => {
         if (!authHeader || !authHeader.startsWith('Bearer ')) {
             return res.status(401).json({
                 success: false,
-                message: 'Token tidak ditemukan. Silakan login terlebih dahulu.'
+                message: 'Token tidak ditemukan. Silakan login terlebih dahulu.',
+                code: 'TOKEN_NOT_FOUND'
             });
         }
 
@@ -87,7 +128,8 @@ const verifyToken = async (req, res, next) => {
             if (users.length === 0) {
                 return res.status(401).json({
                     success: false,
-                    message: 'User tidak ditemukan.'
+                    message: 'User tidak ditemukan.',
+                    code: 'USER_NOT_FOUND'
                 });
             }
 
@@ -97,13 +139,18 @@ const verifyToken = async (req, res, next) => {
             if (error.name === 'TokenExpiredError') {
                 return res.status(401).json({
                     success: false,
-                    message: 'Token telah kadaluarsa. Silakan login kembali.'
+                    message: 'Token telah kadaluarsa. Silakan login kembali.',
+                    code: 'TOKEN_EXPIRED'
                 });
             }
-            return res.status(401).json({
-                success: false,
-                message: 'Token tidak valid.'
-            });
+            if (error.name === 'JsonWebTokenError') {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Token tidak valid.',
+                    code: 'INVALID_TOKEN'
+                });
+            }
+            throw error;
         }
     } catch (error) {
         console.error('Auth middleware error:', error);
@@ -119,14 +166,16 @@ const isAdmin = (req, res, next) => {
     if (!req.user) {
         return res.status(401).json({
             success: false,
-            message: 'Unauthorized'
+            message: 'Unauthorized',
+            code: 'UNAUTHORIZED'
         });
     }
 
     if (req.user.role !== 'admin') {
         return res.status(403).json({
             success: false,
-            message: 'Akses ditolak. Hanya admin yang dapat mengakses.'
+            message: 'Akses ditolak. Hanya admin yang dapat mengakses.',
+            code: 'FORBIDDEN'
         });
     }
 
@@ -138,14 +187,16 @@ const isUser = (req, res, next) => {
     if (!req.user) {
         return res.status(401).json({
             success: false,
-            message: 'Unauthorized'
+            message: 'Unauthorized',
+            code: 'UNAUTHORIZED'
         });
     }
 
     if (req.user.role !== 'user' && req.user.role !== 'admin') {
         return res.status(403).json({
             success: false,
-            message: 'Akses ditolak.'
+            message: 'Akses ditolak.',
+            code: 'FORBIDDEN'
         });
     }
 
@@ -491,6 +542,30 @@ app.delete('/api/auth/users/:id', verifyToken, isAdmin, async (req, res) => {
 });
 
 // ============================================================
+// HEALTH CHECK - DITAMBAHKAN
+// ============================================================
+app.get('/api/health', async (req, res) => {
+    try {
+        await db.query('SELECT 1');
+        res.json({
+            success: true,
+            status: 'OK',
+            database: 'Connected',
+            timestamp: new Date().toISOString(),
+            environment: process.env.NODE_ENV || 'development'
+        });
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            status: 'ERROR',
+            database: 'Disconnected',
+            error: err.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+// ============================================================
 // ROUTE UTAMA
 // ============================================================
 app.get('/', (req, res) => {
@@ -499,7 +574,21 @@ app.get('/', (req, res) => {
         message: '🚀 SPK AHP Perpustakaan Kab. Brebes',
         version: '1.0.0',
         status: 'Running',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        endpoints: {
+            health: '/api/health',
+            test: '/api/test',
+            auth: '/api/auth',
+            kriteria: '/api/kriteria',
+            subKriteria: '/api/sub-kriteria',
+            alternatif: '/api/alternatif',
+            pairwise: '/api/pairwise',
+            normalisasi: '/api/normalisasi',
+            ahp: '/api/ahp',
+            peminjaman: '/api/peminjaman',
+            rating: '/api/rating',
+            dashboard: '/api/dashboard'
+        }
     });
 });
 
@@ -513,7 +602,10 @@ app.get('/api/test', async (req, res) => {
             success: true,
             message: '✅ API SPK AHP Berjalan!',
             database: 'Terhubung',
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            cors: {
+                allowedOrigins: allowedOrigins
+            }
         });
     } catch (err) {
         res.status(500).json({
@@ -1363,17 +1455,12 @@ app.post('/api/alternatif/delete-all', verifyToken, isAdmin, async (req, res) =>
     try {
         console.log('🗑️ Menghapus semua data buku...');
         
-        // Matikan foreign key checks
         await db.query('SET FOREIGN_KEY_CHECKS = 0');
-        
-        // Hapus data dari tabel terkait
         await db.query('TRUNCATE TABLE tbl_nilai_alternatif');
         await db.query('TRUNCATE TABLE tbl_hasil_ahp');
         await db.query('TRUNCATE TABLE tbl_peminjaman');
         await db.query('TRUNCATE TABLE tbl_rating');
         await db.query('TRUNCATE TABLE tbl_alternatif');
-        
-        // Nyalakan kembali foreign key checks
         await db.query('SET FOREIGN_KEY_CHECKS = 1');
         
         console.log('✅ Semua data buku berhasil dihapus!');
@@ -1392,16 +1479,7 @@ app.post('/api/alternatif/delete-all', verifyToken, isAdmin, async (req, res) =>
 });
 
 // ============================================================
-// ========== ROUTE NILAI ALTERNATIF ===========================
-// ============================================================
-// ... lanjutkan kode berikutnya
-
-// ============================================================
-// ========== ROUTE NILAI ALTERNATIF ===========================
-// ============================================================
-
-// ============================================================
-// ========== ROUTE NILAI ALTERNATIF ===========================
+// ========== ROUTE NILAI ALTERNATIF - DIPERBAIKI =============
 // ============================================================
 
 // GET - Semua user bisa melihat
@@ -1422,10 +1500,24 @@ app.get('/api/nilai-alternatif', async (req, res) => {
     }
 });
 
-// GET by buku - Semua user bisa melihat
+// GET by buku - DIPERBAIKI dengan pengecekan buku
 app.get('/api/nilai-alternatif/buku/:idBuku', async (req, res) => {
     try {
         const { idBuku } = req.params;
+        
+        // Cek apakah buku ada
+        const [buku] = await db.query(
+            'SELECT id_alternatif FROM tbl_alternatif WHERE id_alternatif = ?',
+            [idBuku]
+        );
+        
+        if (buku.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: `Buku dengan ID ${idBuku} tidak ditemukan`
+            });
+        }
+        
         const [rows] = await db.query(`
             SELECT na.*, sk.nama_sub, sk.id_kriteria, k.nama_kriteria
             FROM tbl_nilai_alternatif na
@@ -1433,10 +1525,18 @@ app.get('/api/nilai-alternatif/buku/:idBuku', async (req, res) => {
             JOIN tbl_kriteria k ON sk.id_kriteria = k.id_kriteria
             WHERE na.id_alternatif = ?
         `, [idBuku]);
-        res.json({ success: true, data: rows });
+        
+        res.json({ 
+            success: true, 
+            data: rows,
+            message: rows.length === 0 ? 'Belum ada nilai untuk buku ini' : undefined
+        });
     } catch (err) {
         console.error('Error GET /api/nilai-alternatif/buku/:id:', err);
-        res.status(500).json({ success: false, message: err.message });
+        res.status(500).json({ 
+            success: false, 
+            message: err.message 
+        });
     }
 });
 
@@ -1452,7 +1552,6 @@ app.post('/api/nilai-alternatif', verifyToken, isAdmin, async (req, res) => {
             });
         }
 
-        // Cek apakah sudah ada nilai untuk kombinasi ini
         const [existing] = await db.query(
             'SELECT * FROM tbl_nilai_alternatif WHERE id_alternatif = ? AND id_sub = ?',
             [id_alternatif, id_sub]
@@ -1512,7 +1611,6 @@ app.delete('/api/nilai-alternatif/buku/:idBuku', verifyToken, isAdmin, async (re
     try {
         const { idBuku } = req.params;
 
-        // Cek apakah buku ada
         const [buku] = await db.query(
             'SELECT id_alternatif FROM tbl_alternatif WHERE id_alternatif = ?',
             [idBuku]
@@ -1539,50 +1637,10 @@ app.delete('/api/nilai-alternatif/buku/:idBuku', verifyToken, isAdmin, async (re
         res.status(500).json({ success: false, message: err.message });
     }
 });
-// GET nilai alternatif user
-app.get('/api/nilai-alternatif-user', verifyToken, isUser, async (req, res) => {
-    try {
-        const userId = req.query.userId || req.user.id_user;
-        const [rows] = await db.query(
-            'SELECT * FROM tbl_nilai_alternatif_user WHERE id_user = ?',
-            [userId]
-        );
-        res.json({ success: true, data: rows });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-});
 
-// POST nilai alternatif user
-app.post('/api/nilai-alternatif-user', verifyToken, isUser, async (req, res) => {
-    try {
-        const { id_alternatif, id_sub, nilai = 1 } = req.body;
-        const id_user = req.user.id_user;
-
-        // Cek apakah sudah ada
-        const [existing] = await db.query(
-            'SELECT * FROM tbl_nilai_alternatif_user WHERE id_user = ? AND id_alternatif = ? AND id_sub = ?',
-            [id_user, id_alternatif, id_sub]
-        );
-
-        if (existing.length > 0) {
-            await db.query(
-                'UPDATE tbl_nilai_alternatif_user SET nilai = ? WHERE id_user = ? AND id_alternatif = ? AND id_sub = ?',
-                [nilai, id_user, id_alternatif, id_sub]
-            );
-        } else {
-            await db.query(
-                'INSERT INTO tbl_nilai_alternatif_user (id_user, id_alternatif, id_sub, nilai) VALUES (?, ?, ?, ?)',
-                [id_user, id_alternatif, id_sub, nilai]
-            );
-        }
-
-        res.json({ success: true, message: 'Penilaian berhasil disimpan' });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-});
-
+// ============================================================
+// ========== ROUTE NILAI ALTERNATIF USER ======================
+// ============================================================
 
 // GET nilai alternatif user
 app.get('/api/nilai-alternatif-user', verifyToken, isUser, async (req, res) => {
@@ -1604,7 +1662,6 @@ app.post('/api/nilai-alternatif-user', verifyToken, isUser, async (req, res) => 
         const { id_alternatif, id_sub, nilai = 1 } = req.body;
         const id_user = req.user.id_user;
 
-        // Cek apakah sudah ada
         const [existing] = await db.query(
             'SELECT * FROM tbl_nilai_alternatif_user WHERE id_user = ? AND id_alternatif = ? AND id_sub = ?',
             [id_user, id_alternatif, id_sub]
@@ -1634,7 +1691,6 @@ app.delete('/api/nilai-alternatif-user/:id', verifyToken, isUser, async (req, re
         const { id } = req.params;
         const id_user = req.user.id_user;
 
-        // Cek kepemilikan
         const [existing] = await db.query(
             'SELECT * FROM tbl_nilai_alternatif_user WHERE id_nilai = ? AND id_user = ?',
             [id, id_user]
@@ -1650,66 +1706,6 @@ app.delete('/api/nilai-alternatif-user/:id', verifyToken, isUser, async (req, re
         await db.query('DELETE FROM tbl_nilai_alternatif_user WHERE id_nilai = ?', [id]);
 
         res.json({ success: true, message: 'Penilaian berhasil dihapus' });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-});
-
-// GET - Ambil nilai alternatif user
-app.get('/api/nilai-alternatif-user', verifyToken, isUser, async (req, res) => {
-    try {
-        const userId = req.query.userId || req.user.id_user;
-        const [rows] = await db.query(
-            'SELECT * FROM tbl_nilai_alternatif_user WHERE id_user = ?',
-            [userId]
-        );
-        res.json({ success: true, data: rows });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-});
-
-// POST - Simpan nilai alternatif user
-app.post('/api/nilai-alternatif-user', verifyToken, isUser, async (req, res) => {
-    try {
-        const { id_alternatif, id_sub, nilai = 1 } = req.body;
-        const id_user = req.user.id_user;
-
-        const [existing] = await db.query(
-            'SELECT * FROM tbl_nilai_alternatif_user WHERE id_user = ? AND id_alternatif = ? AND id_sub = ?',
-            [id_user, id_alternatif, id_sub]
-        );
-
-        if (existing.length > 0) {
-            await db.query(
-                'UPDATE tbl_nilai_alternatif_user SET nilai = ? WHERE id_user = ? AND id_alternatif = ? AND id_sub = ?',
-                [nilai, id_user, id_alternatif, id_sub]
-            );
-        } else {
-            await db.query(
-                'INSERT INTO tbl_nilai_alternatif_user (id_user, id_alternatif, id_sub, nilai) VALUES (?, ?, ?, ?)',
-                [id_user, id_alternatif, id_sub, nilai]
-            );
-        }
-
-        res.json({ success: true, message: 'Penilaian berhasil disimpan' });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-});
-
-// DELETE - Hapus semua nilai untuk buku tertentu (user)
-app.delete('/api/nilai-alternatif-user/buku/:idBuku', verifyToken, isUser, async (req, res) => {
-    try {
-        const { idBuku } = req.params;
-        const id_user = req.user.id_user;
-
-        await db.query(
-            'DELETE FROM tbl_nilai_alternatif_user WHERE id_user = ? AND id_alternatif = ?',
-            [id_user, idBuku]
-        );
-
-        res.json({ success: true, message: 'Data penilaian berhasil dihapus' });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -2128,7 +2124,6 @@ app.get('/api/stats', async (req, res) => {
 // Buat tabel peminjaman jika belum ada (UPDATE status ENUM)
 (async () => {
     try {
-        // Cek apakah tabel sudah ada, jika belum buat
         const [tables] = await db.query(
             "SHOW TABLES LIKE 'tbl_peminjaman'"
         );
@@ -2150,7 +2145,6 @@ app.get('/api/stats', async (req, res) => {
             `);
             console.log('✅ Tabel tbl_peminjaman dibuat dengan status pending');
         } else {
-            // Cek apakah kolom status sudah memiliki ENUM 'pending'
             const [columns] = await db.query(
                 "SHOW COLUMNS FROM tbl_peminjaman LIKE 'status'"
             );
@@ -2192,9 +2186,7 @@ app.get('/api/stats', async (req, res) => {
     }
 })();
 
-// ============================================================
 // USER: Ajukan peminjaman (status = pending)
-// ============================================================
 app.post('/api/peminjaman', verifyToken, isUser, async (req, res) => {
     try {
         const { id_buku, tanggal_pinjam } = req.body;
@@ -2207,7 +2199,6 @@ app.post('/api/peminjaman', verifyToken, isUser, async (req, res) => {
             });
         }
 
-        // Cek stok buku
         const [buku] = await db.query(
             'SELECT stok FROM tbl_alternatif WHERE id_alternatif = ?',
             [id_buku]
@@ -2227,7 +2218,6 @@ app.post('/api/peminjaman', verifyToken, isUser, async (req, res) => {
             });
         }
 
-        // Cek apakah user sudah memiliki peminjaman aktif (pending atau dipinjam)
         const [existing] = await db.query(
             `SELECT * FROM tbl_peminjaman 
              WHERE id_user = ? AND id_buku = ? AND status IN ('pending', 'dipinjam')`,
@@ -2241,7 +2231,6 @@ app.post('/api/peminjaman', verifyToken, isUser, async (req, res) => {
             });
         }
 
-        // Insert dengan status 'pending'
         const [result] = await db.query(
             `INSERT INTO tbl_peminjaman (id_user, id_buku, tanggal_pinjam, status) 
              VALUES (?, ?, ?, 'pending')`,
@@ -2266,9 +2255,7 @@ app.post('/api/peminjaman', verifyToken, isUser, async (req, res) => {
     }
 });
 
-// ============================================================
 // USER: Get riwayat peminjaman user (semua status)
-// ============================================================
 app.get('/api/peminjaman/riwayat', verifyToken, isUser, async (req, res) => {
     try {
         const id_user = req.user.id_user;
@@ -2296,9 +2283,7 @@ app.get('/api/peminjaman/riwayat', verifyToken, isUser, async (req, res) => {
     }
 });
 
-// ============================================================
 // USER: Pengembalian buku (hanya bisa jika status 'dipinjam')
-// ============================================================
 app.put('/api/peminjaman/:id/kembali', verifyToken, isUser, async (req, res) => {
     try {
         const { id } = req.params;
@@ -2317,7 +2302,6 @@ app.put('/api/peminjaman/:id/kembali', verifyToken, isUser, async (req, res) => 
             });
         }
 
-        // Update status menjadi 'dikembalikan' dan tambah stok
         await db.query(
             `UPDATE tbl_peminjaman 
              SET status = 'dikembalikan', tanggal_kembali = CURDATE()
@@ -2344,9 +2328,7 @@ app.put('/api/peminjaman/:id/kembali', verifyToken, isUser, async (req, res) => 
     }
 });
 
-// ============================================================
 // ADMIN: Get semua peminjaman (LENGKAP dengan data user & buku)
-// ============================================================
 app.get('/api/peminjaman/all', verifyToken, isAdmin, async (req, res) => {
     try {
         const [rows] = await db.query(
@@ -2393,9 +2375,7 @@ app.get('/api/peminjaman/all', verifyToken, isAdmin, async (req, res) => {
     }
 });
 
-// ============================================================
 // ADMIN: Verifikasi peminjaman (pending → dipinjam)
-// ============================================================
 app.put('/api/peminjaman/admin/:id/verifikasi', verifyToken, isAdmin, async (req, res) => {
     const conn = await db.getConnection();
     try {
@@ -2468,9 +2448,7 @@ app.put('/api/peminjaman/admin/:id/verifikasi', verifyToken, isAdmin, async (req
     }
 });
 
-// ============================================================
 // ADMIN: Tolak peminjaman (pending → ditolak)
-// ============================================================
 app.put('/api/peminjaman/admin/:id/tolak', verifyToken, isAdmin, async (req, res) => {
     try {
         const { id } = req.params;
@@ -2506,9 +2484,7 @@ app.put('/api/peminjaman/admin/:id/tolak', verifyToken, isAdmin, async (req, res
     }
 });
 
-// ============================================================
 // ADMIN: Konfirmasi pengembalian buku (dipinjam → dikembalikan)
-// ============================================================
 app.put('/api/peminjaman/admin/:id/kembali', verifyToken, isAdmin, async (req, res) => {
     const conn = await db.getConnection();
     try {
@@ -2560,9 +2536,7 @@ app.put('/api/peminjaman/admin/:id/kembali', verifyToken, isAdmin, async (req, r
     }
 });
 
-// ============================================================
 // ADMIN: Tambah peminjaman langsung (bypass, status pending)
-// ============================================================
 app.post('/api/peminjaman/admin', verifyToken, isAdmin, async (req, res) => {
     try {
         const { id_user, id_buku, tanggal_pinjam, tanggal_kembali, status = 'pending' } = req.body;
@@ -2619,9 +2593,7 @@ app.post('/api/peminjaman/admin', verifyToken, isAdmin, async (req, res) => {
     }
 });
 
-// ============================================================
 // ADMIN: Update peminjaman
-// ============================================================
 app.put('/api/peminjaman/admin/:id', verifyToken, isAdmin, async (req, res) => {
     try {
         const { id } = req.params;
@@ -2691,9 +2663,7 @@ app.put('/api/peminjaman/admin/:id', verifyToken, isAdmin, async (req, res) => {
     }
 });
 
-// ============================================================
 // ADMIN: Delete peminjaman
-// ============================================================
 app.delete('/api/peminjaman/admin/:id', verifyToken, isAdmin, async (req, res) => {
     const conn = await db.getConnection();
     try {
@@ -2746,7 +2716,6 @@ app.delete('/api/peminjaman/admin/:id', verifyToken, isAdmin, async (req, res) =
         });
     }
 });
-
 
 // ============================================================
 // ========== ROUTE RATING =====================================
@@ -2963,22 +2932,36 @@ app.get('/api/dashboard/stats', verifyToken, async (req, res) => {
 });
 
 // ============================================================
-// ERROR HANDLING
+// ERROR HANDLING - DIPERBAIKI
 // ============================================================
 
+// 404 handler
 app.use((req, res) => {
     res.status(404).json({
         success: false,
-        message: 'Endpoint tidak ditemukan'
+        message: `Endpoint ${req.method} ${req.url} tidak ditemukan`,
+        code: 'ENDPOINT_NOT_FOUND'
     });
 });
 
+// Global error handler
 app.use((err, req, res, next) => {
     console.error('❌ Server Error:', err);
+    
+    // Handle JWT errors
+    if (err.name === 'UnauthorizedError' || err.name === 'JsonWebTokenError') {
+        return res.status(401).json({
+            success: false,
+            message: 'Token tidak valid atau kadaluarsa',
+            code: 'INVALID_TOKEN'
+        });
+    }
+    
     res.status(500).json({
         success: false,
         message: 'Terjadi kesalahan server',
-        error: err.message
+        error: process.env.NODE_ENV === 'development' ? err.message : undefined,
+        code: 'INTERNAL_SERVER_ERROR'
     });
 });
 
@@ -2991,7 +2974,8 @@ app.listen(PORT, () => {
     console.log('🚀 SERVER SPK AHP PERPUSTAKAAN BREBES');
     console.log('============================================');
     console.log(`📡 Server: http://localhost:${PORT}`);
-    console.log(`📋 Test API: http://localhost:${PORT}/api/test`);
+    console.log(`📋 Health: http://localhost:${PORT}/api/health`);
+    console.log(`📋 Test:   http://localhost:${PORT}/api/test`);
     console.log('============================================');
     console.log('\n🔐 AUTH ENDPOINT:');
     console.log('  POST /api/auth/login         - Login');
@@ -3034,6 +3018,15 @@ app.listen(PORT, () => {
     console.log('  PUT  /api/peminjaman/admin/:id - Update peminjaman');
     console.log('  DEL  /api/peminjaman/admin/:id - Hapus peminjaman');
     console.log('  GET  /api/rating/all        - Semua rating');
-    console.log('  DEL  /api/alternatif/truncate - Hapus semua buku');
+    console.log('  DEL  /api/alternatif/delete-all - Hapus semua buku');
     console.log('============================================\n');
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+    console.error('❌ Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
 });
